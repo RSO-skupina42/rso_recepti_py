@@ -1,7 +1,8 @@
 from typing import List
 from fastapi import APIRouter, HTTPException, Path, Depends, FastAPI
 from sqlalchemy.orm import Session
-from database import SessionLocal, engine
+from database import SessionLocal, engine, hostname, username, password, database
+import requests
 
 #za loging
 import sentry_sdk
@@ -16,6 +17,8 @@ import crud, models, schemas, receptiZunanjAPI
 #za health and livnes info 
 from fastapi_health import health
 from datetime import datetime
+import psycopg2
+
 #za middleware
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -28,6 +31,7 @@ sentry_sdk.init(
 )
 set_level("info")
 
+
 #------DATE-TIME------
 #date and time za izpise 
 def get_date_and_time():
@@ -36,6 +40,7 @@ def get_date_and_time():
     return dt_string
 
 
+#------APP-INIT------
 #inicializiraj app
 app = FastAPI(
     title="Recepti",
@@ -44,6 +49,8 @@ app = FastAPI(
     #docs_url="/openapi",
 )
 
+
+#------MIDDLEWARE------
 origins = [
     ""
 ]
@@ -54,7 +61,6 @@ app.add_middleware(
     allow_methods=[""],
     allow_headers=["*"],
 )
-
 
 
 #------METRIKE------ 
@@ -68,26 +74,52 @@ models.Base.metadata.create_all(bind=engine)
 
 #------HEALTH and LIVNES------
 
+#naredi dict za prikazat health in livenes checks
+async def health_success_failure_handler(**conditions):
+    rez = {"status": "UP", "checks": []}
+    for cond in conditions:
+        to_add = {
+            "name": cond,
+            "status": conditions[cond]
+        }
+        rez["checks"].append(to_add)
+        if not conditions[cond]:
+            rez["status"] = "DOWN"
+    return rez
+
+#pridobi stanje povezljivosti z bazo 
+def check_db_connection():
+    try:
+        #se poskusi povezat na bazo
+        conn = psycopg2.connect(f"dbname={database} user={username} host={hostname} password={password} "
+                                f"connect_timeout=1")
+        
+        #zapre povezavo z bazo
+        conn.close()
+        
+        #če si se povezal na bazo potem vrni True
+        return True
+    except:
+        print("I am unable to connect to the database")
+        return False
+
+
 #pridobi stanje mikrostoritve
 def get_ms_status():
-    if broken:
-        return {"status": "The microservice is BROKEN", 
-                "date": get_date_and_time()}
-    return {"status": "The microservice is working",
-            "date": get_date_and_time()}
-
+    global broken
+    return not broken
 
 #Preveri ali je mikrostoritev živa
 def is_ms_alive():
-    if broken:
+    if broken or not database_working:
         return False
     return True
 
-#dodaj pot do preverjanja health in livness
-app.add_api_route("/health/liveness", health([is_ms_alive, get_ms_status]))
-
 #globalna spremenljivka za "pokvarit" storitev (for demo)
 broken = False
+
+#globalna spremenljivka za delovanje baze
+database_working = True
 
 #"pokvari" mikrostoritev
 @app.post("/break")
@@ -103,7 +135,17 @@ async def unbreak_app():
     broken = False
     return {"The ms is fixed"}
 
-#------ CORE funkcionalnosti ------
+#not sure kako točno tole dela odstranil en check(za prostor v bazi)
+health_handler = health([get_ms_status, check_db_connection],
+                        success_handler=health_success_failure_handler,
+                        failure_handler=health_success_failure_handler)
+
+#doda poti za health in liveness 
+app.add_api_route("/health/liveness", health_handler, name="check liveness")
+app.add_api_route("/health/readiness", health_handler, name="check readiness")
+
+
+#------ CORE FUNKCIONALNOSTI ------
 
 # Dependency
 def get_db():
@@ -127,12 +169,11 @@ async def read_recept(search_text, db: Session = Depends(get_db)):
     db_recept = crud.get_recept(db, imeRecepta=search_text)
     #če recept že obstaja ga vrni
 
-    #if db_recept:
-        #return db_recept
+    if db_recept:
+        return db_recept
 
     #če recept še ne obstaja izvedi poizvedbo na zunaji API in na našo bazo izdelkov
     scrapy_rezultati = receptiZunanjAPI.get_results(search_text)
-    print(scrapy_rezultati)
 
     #ustvari prazen recept z imenom "search_text"
     recept_za_poslat = schemas.ReceptCreate(imeRecepta=search_text)
@@ -148,42 +189,12 @@ async def read_recept(search_text, db: Session = Depends(get_db)):
         imeIzdelka_sc = sestavina["data"][0]["title"]
         cenaIzdelka_sc = sestavina["data"][0]["price"]
         trgovina_sc = sestavina["data"][0]["store_name"]
-        print("Sem v zanki za ustvarjat sestavine")
-        print(imeIzdelka_sc, cenaIzdelka_sc, trgovina_sc)
-        print(type(imeIzdelka_sc),type(cenaIzdelka_sc),type(trgovina_sc))
 
         #ustvari objekt SestavinaCreate, ki ga podaj crud funkciji, ki ustvari sestavino
         sestavina_za_db = schemas.SestavinaCreate(imeSestavine=imeIzdelka_sc, cenaSestavine=cenaIzdelka_sc, trgovnina=trgovina_sc)
         ustvarjena = crud.create_sestavino_za_recept(db=db, sestavina=sestavina_za_db, recept_id=recept_db_id)
-        print(ustvarjena)
 
     #na koncu vrni novo ustvarjen recept 
     db.refresh(recept_db) #?? nism zih če je to vredu
 
     return recept_db
-
-#------------OLD---------------------------------
-'''
-#ustavri novo košarico če ne obstaja neka košarica z istim imenom
-@app.post("/kosarice/", response_model=schemas.Kosarica)
-async def create_kosarica(kosarica: schemas.KosaricaCreate, db: Session = Depends(get_db)):
-    db_kosarica = crud.get_kosarica(db, imeKosarice=kosarica.imeKosarice)
-    #print(db_kosarica.imeKosarice)
-    if db_kosarica:
-        raise HTTPException(status_code=400, detail="Kosarica ze obstaja")
-    return crud.create_kosarica(db=db, kosarica=kosarica)
-
-
-#za testiranje samo vrača kar dobi
-@app.get("/recept/{id}")
-async def get_kosarica(id: int):
-    return f"This is the id that was sent through {id}."
-
-
-#košarici s podanim id-jem dodaj nek izdelek
-#TODO posodobi, da bo izdelek dodan iz podatkov iz Timotove MS (to na frontendu al tuki?)
-@app.post("/kosarice/{kosarica_id}/izdelki/", response_model=schemas.Izdelek)
-def create_izdelek_for_kosarica(kosarica_id: int, izdelek: schemas.IzdelekCreate, db: Session = Depends(get_db)):
-    return crud.create_izdelek_kosarico(db=db, izdelek=izdelek, kosarica_id=kosarica_id)
-
-'''
