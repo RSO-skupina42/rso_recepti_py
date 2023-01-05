@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-recepti
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fa-recepti
+  template:
+    metadata:
+      labels:
+        app: fa-recepti
+    spec:
+      containers: 
+        - image: amihevc/rso_recepti_py
+          name: fa-recepti
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-recepti-pass
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-recepti-pass
+                  key: password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: db-recepti-pass
+                  key: database
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: db-recepti-pass
+                  key: hostname
+          ports:
+            - containerPort: 8004
+              name: server
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: server
+            initialDelaySeconds: 20
+            periodSeconds: 3
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: fa-recepti
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8003
+      protocol: TCP
+      targetPort: server
+  selector:
+    app: fa-recepti
