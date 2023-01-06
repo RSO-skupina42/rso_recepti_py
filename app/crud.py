@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
 
-import models
+from app import models
 
-import schemas
+from app import schemas
 
 # get za kosarico z imenom
 def get_recept(db: Session, imeRecepta: str):

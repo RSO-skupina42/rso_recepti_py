@@ -1,8 +1,8 @@
 from typing import List
 from fastapi import APIRouter, HTTPException, Path, Depends, FastAPI
 from sqlalchemy.orm import Session
-from database import SessionLocal, engine, hostname, username, password, database
-import requests
+from .database import SessionLocal, engine, hostname, username, password, database
+
 
 #za loging
 import sentry_sdk
@@ -12,7 +12,9 @@ from sentry_sdk import set_level
 from prometheus_fastapi_instrumentator import Instrumentator
 
 #local import files
-import crud, models, schemas, receptiZunanjAPI
+from app import crud
+from app import schemas, receptiZunanjAPI
+from app import models
 
 #za health and livnes info 
 from fastapi_health import health
