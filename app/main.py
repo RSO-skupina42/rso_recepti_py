@@ -47,8 +47,8 @@ def get_date_and_time():
 app = FastAPI(
     title="Recepti",
     description="neki napiš",
-    #root_path="/receptims",
-    #docs_url="/openapi",
+    root_path="/receptims",
+    docs_url="/openapi",
 )
 
 
